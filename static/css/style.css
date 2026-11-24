@@ -1,0 +1,196 @@
+/* Power BI Extraction Insights: a quiet page around one loud thing, the workbook preview. */
+:root {
+  --paper: #f3f5f2;
+  --sheet: #ffffff;
+  --ink: #1f2a27;
+  --muted: #5d6a65;
+  --grid: #d3dbd6;
+  --grid-strong: #b4c1ba;
+  --gutter: #eaefeb;
+  --ledger: #1e6b52;
+  --ledger-dark: #154c3a;
+  --ledger-tint: #e2eee8;
+  --high: #a3302a;
+  --medium: #855a00;
+  --low: #2e5d92;
+  --info: #5d6a65;
+  --display: "Bahnschrift", "DIN Alternate", "D-DIN", "Arial Narrow", sans-serif;
+  --text: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --code: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.5 var(--text);
+}
+.page { max-width: 1120px; margin: 0 auto; padding: 48px 32px 72px; }
+h1, h2 { font-family: var(--display); font-weight: 600; margin: 0; }
+h1 { font-size: 36px; line-height: 1.1; letter-spacing: -0.01em; font-stretch: 87.5%; }
+h2 { font-size: 21px; line-height: 1.25; font-stretch: 87.5%; }
+a { color: var(--ledger); }
+:focus-visible { outline: 2px solid var(--ledger); outline-offset: 2px; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
+  clip-path: inset(50%); white-space: nowrap;
+}
+
+/* ---- masthead ---- */
+.masthead { max-width: 70ch; margin-bottom: 32px; }
+.lede { font-size: 17px; margin: 12px 0 6px; }
+.version { color: var(--muted); font-size: 13px; margin: 0; }
+
+/* ---- intake: drop zone + options ---- */
+.intake { background: var(--sheet); border: 1px solid var(--grid); }
+.drop {
+  display: flex; align-items: center; gap: 24px;
+  padding: 28px 28px 26px; margin: 16px; cursor: pointer;
+  border: 1.5px dashed var(--grid-strong);
+  transition: background-color .15s, border-color .15s;
+}
+.drop:hover, .drop.is-over { border-color: var(--ledger); background: var(--ledger-tint); }
+.drop:focus-within { outline: 2px solid var(--ledger); outline-offset: 2px; }
+.drop.has-file { border-style: solid; border-color: var(--ledger); }
+.drop-text { display: grid; gap: 2px; }
+.drop-text strong { font-family: var(--display); font-size: 21px; font-weight: 600; font-stretch: 87.5%; }
+.drop-text span { color: var(--muted); }
+.link-like { color: var(--ledger); text-decoration: underline; text-underline-offset: 2px; }
+button.plain { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; text-align: left; }
+/* a small stack of sheets: the file going in is a workbook coming out */
+.drop-file { position: relative; width: 44px; height: 52px; flex: none; }
+.drop-sheet {
+  position: absolute; inset: 0; background: var(--sheet); border: 1.5px solid var(--grid-strong);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 100% 10px, 14px 100%; background-position: 0 9px, 13px 0;
+}
+.drop-sheet:nth-child(2) { transform: translate(5px, -5px); }
+.drop-sheet:nth-child(3) { transform: translate(10px, -10px); border-color: var(--ledger); }
+
+.options {
+  display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 1.2fr) minmax(220px, 1.2fr) auto;
+  gap: 20px 28px; align-items: start; margin: 0; padding: 4px 28px 24px; border: 0;
+}
+.field label { display: block; font-weight: 600; margin-bottom: 6px; }
+select {
+  width: 100%; font: inherit; color: var(--ink); background: var(--sheet);
+  border: 1px solid var(--grid-strong); border-radius: 2px; padding: 7px 8px;
+}
+.check { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding-top: 2px; }
+.check input { width: 16px; height: 16px; margin: 3px 0 0; accent-color: var(--ledger); }
+.check label { font-weight: 600; }
+.check .hint { display: block; font-weight: 400; color: var(--muted); font-size: 13px; margin-top: 2px; }
+.primary, .secondary {
+  display: inline-block; font: 600 15px/1.2 var(--text); border-radius: 2px; padding: 11px 18px;
+  text-decoration: none; cursor: pointer; white-space: nowrap;
+}
+.primary { color: #fff; background: var(--ledger); border: 1px solid var(--ledger); }
+.primary:hover { background: var(--ledger-dark); border-color: var(--ledger-dark); }
+.primary:disabled { background: var(--grid); border-color: var(--grid); color: var(--muted); cursor: not-allowed; }
+.secondary { color: var(--ledger); background: var(--sheet); border: 1px solid var(--ledger); }
+.secondary:hover { background: var(--ledger-tint); }
+.options .primary { align-self: end; }
+.form-error { margin: 0 28px 20px; color: var(--high); font-weight: 600; }
+
+/* ---- progress: the pipeline is a real sequence, so it is numbered ---- */
+.progress { margin-top: 40px; }
+.steps { list-style: none; counter-reset: step; margin: 16px 0 0; padding: 0; max-width: 760px; }
+.steps li {
+  counter-increment: step; display: grid; grid-template-columns: 32px 1fr; column-gap: 12px;
+  padding: 7px 0; border-bottom: 1px solid var(--grid); color: var(--muted);
+}
+.steps li::before {
+  content: counter(step); grid-row: span 2; width: 24px; height: 24px; display: grid; place-items: center;
+  font: 600 13px/1 var(--display); border: 1px solid var(--grid-strong); border-radius: 50%; color: var(--muted);
+}
+.step-note { grid-column: 2; font-size: 13px; color: var(--muted); }
+.step-note:empty { display: none; }
+.steps li[data-state="done"] { color: var(--ink); }
+.steps li[data-state="done"]::before { content: "✓"; background: var(--ledger-tint); border-color: var(--ledger); color: var(--ledger); }
+.steps li[data-state="active"] { color: var(--ink); font-weight: 600; }
+.steps li[data-state="active"]::before { background: var(--ledger); border-color: var(--ledger); color: #fff; animation: beat 1.2s ease-in-out infinite; }
+.steps li[data-state="error"]::before { content: "!"; background: var(--high); border-color: var(--high); color: #fff; }
+.steps li[data-state="error"] .step-note { color: var(--high); font-weight: 600; }
+@keyframes beat { 50% { box-shadow: 0 0 0 4px var(--ledger-tint); } }
+
+/* ---- result: the workbook preview ---- */
+.result { margin-top: 40px; }
+.result-head { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: center; justify-content: space-between; }
+.downloads { display: flex; gap: 10px; flex-wrap: wrap; }
+.warnings { color: var(--medium); margin: 12px 0 0; }
+
+.book { margin-top: 20px; background: var(--sheet); border: 1px solid var(--grid-strong); }
+.grid-wrap { max-height: 520px; overflow: auto; }
+.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 13px; line-height: 1.4; }
+.grid th, .grid td {
+  border-right: 1px solid var(--grid); border-bottom: 1px solid var(--grid);
+  padding: 5px 8px; vertical-align: top; text-align: left;
+}
+.grid thead th {
+  position: sticky; top: 0; z-index: 2; background: var(--gutter); font-weight: 600;
+  border-bottom-color: var(--grid-strong); white-space: nowrap;
+}
+.grid .rn {
+  position: sticky; left: 0; z-index: 1; background: var(--gutter); color: var(--muted);
+  text-align: right; width: 44px; min-width: 44px; font-variant-numeric: tabular-nums;
+}
+.grid thead .rn { z-index: 3; }
+.grid td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.grid td.id { font-family: var(--display); font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.grid td.wide { min-width: 280px; max-width: 460px; }
+.grid pre {
+  margin: 0; max-width: 620px; max-height: 150px; overflow: auto; font: 12px/1.45 var(--code); white-space: pre; color: var(--ink);
+}
+.grid tbody tr:hover td:not(.rn) { background: #f7faf8; }
+.sev { display: inline-block; padding-left: 7px; border-left: 3px solid currentColor; font-weight: 600; }
+.sev-high { color: var(--high); }
+.sev-medium { color: var(--medium); }
+.sev-low { color: var(--low); }
+.sev-info { color: var(--info); }
+.tag-ok { color: var(--ledger); font-weight: 600; }
+.tag-bad { color: var(--high); font-weight: 600; }
+
+.sheet-tabs {
+  display: flex; overflow-x: auto; border-top: 1px solid var(--grid-strong); background: var(--gutter); padding: 0 8px;
+}
+.sheet-tabs button {
+  font: 600 14px/1 var(--display); font-stretch: 87.5%; color: var(--muted); background: transparent;
+  border: 0; border-right: 1px solid var(--grid); padding: 10px 16px 9px; cursor: pointer; white-space: nowrap;
+}
+.sheet-tabs button:hover { color: var(--ink); }
+.sheet-tabs button[aria-selected="true"] {
+  color: var(--ledger); background: var(--sheet); box-shadow: inset 0 -3px 0 var(--ledger);
+}
+.statusbar {
+  display: flex; flex-wrap: wrap; gap: 4px 22px; padding: 7px 12px; font-size: 13px; color: var(--muted);
+  border-top: 1px solid var(--grid); order: 3;
+}
+.statusbar b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.book { display: flex; flex-direction: column; }
+.grid-wrap { order: 1; }
+.sheet-tabs { order: 2; }
+.book-note { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+
+/* ---- recent workbooks ---- */
+.recent { margin-top: 56px; }
+.recent-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
+.recent-table th { text-align: left; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--grid-strong); padding: 6px 10px 6px 0; }
+.recent-table td { border-bottom: 1px solid var(--grid); padding: 8px 10px 8px 0; vertical-align: top; }
+.recent-table .empty { color: var(--muted); }
+.recent-table a + a { margin-left: 14px; }
+
+@media (max-width: 900px) {
+  .options { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 620px) {
+  .page { padding: 28px 16px 56px; }
+  h1 { font-size: 30px; }
+  .drop { flex-direction: column; align-items: flex-start; padding: 20px; margin: 12px; }
+  .options { grid-template-columns: 1fr; padding: 4px 16px 20px; }
+  .recent-table th:nth-child(3), .recent-table td:nth-child(3) { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

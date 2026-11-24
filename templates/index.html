@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Power BI Extraction Insights</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%231E6B52'/%3E%3Cpath d='M3 4h10M3 8h10M3 12h10M7 2v12' stroke='%23fff' stroke-width='1.2'/%3E%3C/svg%3E">
+</head>
+<body>
+<main class="page">
+  <header class="masthead">
+    <h1>Power BI Extraction Insights</h1>
+    <p class="lede">Upload a Power BI file to list its tabs, insights, semantic model, Power Query sources and DAX,
+      and get a migration workbook for Incorta, QuickSight or Tableau.</p>
+    <p class="version">Version {{ version }}, running on this computer</p>
+  </header>
+
+  <form id="upload-form" class="intake" novalidate>
+    <label id="drop" class="drop" for="file">
+      <input id="file" name="file" type="file" accept="{{ extensions }}" class="visually-hidden">
+      <span class="drop-file" aria-hidden="true">
+        <span class="drop-sheet"></span><span class="drop-sheet"></span><span class="drop-sheet"></span>
+      </span>
+      <span class="drop-text">
+        <strong id="drop-title">Drop a .pbix file here</strong>
+        <span id="drop-hint">or <span class="link-like">choose a file</span>. Also reads .pbit templates and .bim models,
+          up to {{ max_mb }} MB.</span>
+      </span>
+    </label>
+
+    <fieldset class="options">
+      <legend class="visually-hidden">Options</legend>
+      <div class="field">
+        <label for="dialect">SQL dialect</label>
+        <select id="dialect" name="dialect">
+          {% for key, label in dialects.items() %}
+          <option value="{{ key }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="check">
+        <input id="read_data" name="read_data" type="checkbox">
+        <label for="read_data">Read the data saved in the file
+          <span class="hint">Profiles each column and test-runs every insight query. Slower on large files.</span></label>
+      </div>
+      <button id="submit" type="submit" class="primary" disabled>Create workbook</button>
+    </fieldset>
+    <p id="form-error" class="form-error" role="alert" hidden></p>
+  </form>
+
+  <section id="progress" class="progress" hidden aria-labelledby="progress-title">
+    <h2 id="progress-title">Decoding <span id="progress-file"></span></h2>
+    <ol id="steps" class="steps">
+      {% for s in steps %}<li data-step="{{ loop.index0 }}"><span class="step-name">{{ s }}</span><span class="step-note"></span></li>{% endfor %}
+    </ol>
+    <p id="live" class="visually-hidden" aria-live="polite"></p>
+  </section>
+
+  <section id="result" class="result" hidden aria-labelledby="result-title">
+    <div class="result-head">
+      <h2 id="result-title"></h2>
+      <div class="downloads">
+        <a id="dl-xlsx" class="primary" href="#">Download workbook (.xlsx)</a>
+        <a id="dl-json" class="secondary" href="#">Download JSON</a>
+      </div>
+    </div>
+    <p id="warnings" class="warnings" hidden></p>
+
+    <div class="book">
+      <div class="grid-wrap" tabindex="0" aria-label="Workbook preview">
+        <table id="grid" class="grid"></table>
+      </div>
+      <div class="statusbar" id="statusbar"></div>
+      <div class="sheet-tabs" role="tablist" aria-label="Workbook sheets">
+        <button role="tab" data-sheet="findings" aria-selected="true">Plan: findings</button>
+        <button role="tab" data-sheet="insights" aria-selected="false">Insights</button>
+        <button role="tab" data-sheet="measures" aria-selected="false">Measures</button>
+        <button role="tab" data-sheet="sources" aria-selected="false">Sources</button>
+        <button role="tab" data-sheet="sql" aria-selected="false">Insight SQL</button>
+      </div>
+    </div>
+    <p class="book-note">A preview of five sheets. The workbook has eleven or more: tabs, lineage, columns,
+      relationships, build plan and target views too.</p>
+  </section>
+
+  <section class="recent" aria-labelledby="recent-title">
+    <h2 id="recent-title">Workbooks on this computer</h2>
+    <table class="recent-table">
+      <thead><tr><th scope="col">File</th><th scope="col">Created</th><th scope="col">Contents</th><th scope="col">Download</th></tr></thead>
+      <tbody id="recent"><tr><td colspan="4" class="empty">No workbooks yet. Created workbooks appear here.</td></tr></tbody>
+    </table>
+  </section>
+</main>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
