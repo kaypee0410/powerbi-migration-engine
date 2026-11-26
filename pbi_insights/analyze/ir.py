@@ -7,7 +7,7 @@ grain each aggregate must be computed at (fact vs dimension), which is how fan-o
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 
 
 @dataclass(frozen=True)
@@ -143,6 +143,27 @@ def aggs_in(node, into_scalar: bool = False) -> list[Agg]:
     return out
 
 
+def map_aggs(node, fn):
+    """Copy of `node` with every Agg replaced by fn(agg). Scalar values are left as they are."""
+    if isinstance(node, Agg):
+        return fn(node)
+    if isinstance(node, Scalar) or not isinstance(node, IR_TYPES):
+        return node
+    changes = {}
+    for f in fields(node):
+        v = getattr(node, f.name)
+        if isinstance(v, IR_TYPES):
+            nv = map_aggs(v, fn)
+        elif isinstance(v, tuple):
+            nv = tuple(tuple(map_aggs(x, fn) for x in item) if isinstance(item, tuple) else map_aggs(item, fn)
+                       for item in v)
+        else:
+            continue
+        if nv is not v:
+            changes[f.name] = nv
+    return replace(node, **changes) if changes else node
+
+
 def cols_in(node) -> list[Col]:
     out = []
     for n in walk(node):
@@ -163,6 +184,13 @@ def is_boolean(node) -> bool:
     return (isinstance(node, Bin) and node.op in BOOL_OPS) or isinstance(node, (IsNull, InList)) \
         or (isinstance(node, Un) and node.op == "NOT") or (isinstance(node, Lit) and isinstance(node.value, bool)) \
         or (isinstance(node, Fn) and node.name.startswith("LIKE_"))
+
+
+def as_value(node, dialect: str):
+    """A TRUE/FALSE calculated column as a value: T-SQL cannot SELECT a bare comparison, so use 1/0."""
+    if dialect == "tsql" and is_boolean(node):
+        return Case(((node, Lit(1)), (Un("NOT", node), Lit(0))), None)
+    return node
 
 
 def and_(a, b):

@@ -11,6 +11,7 @@ from pathlib import Path
 from . import __version__
 from .analyze.findings import build_decisions, build_findings
 from .analyze.formulas import tool_formulas
+from .analyze.ir import as_value
 from .analyze.planner import Planner
 from .analyze.profile import data_checks
 from .analyze.sources import analyze_sources, build_view, column_source, source_dialect
@@ -92,6 +93,14 @@ def _measure_extras(m: dict) -> None:
     m["formulas"] = f
 
 
+def _whole_table_sql(s, dialect: str, naming):
+    """Calculated-column aggregate: a subquery over the whole table's view (no filters)."""
+    from sqlglot import exp
+    from .analyze.sqlrender import table_ref
+    inner = Renderer(dialect, col_fn=lambda x: column(x.column)).r(s.expr)
+    return exp.Subquery(this=exp.select(inner).from_(table_ref(naming.view(s.table))))
+
+
 def analyze(path: str | Path, options: Options | None = None, progress=None) -> dict:
     """Run extraction + analysis and return one dictionary with everything the workbook needs."""
     options = options or Options()
@@ -132,9 +141,10 @@ def analyze(path: str | Path, options: Options | None = None, progress=None) -> 
             tr = planner.translator.calc_column(c["table"], c["column"], inline_calc=True)
             home = c["table"]
             rnd = Renderer(src_dialect, col_fn=lambda x, home=home: column(
-                x.column, None if x.table == home else planner.naming.view(x.table)))
+                x.column, None if x.table == home else planner.naming.view(x.table)),
+                scalar_fn=lambda s: _whole_table_sql(s, src_dialect, planner.naming))
             try:
-                c["sql"] = rnd.r(tr.ir).sql(dialect=src_dialect) if tr.ir is not None else ""
+                c["sql"] = rnd.r(as_value(tr.ir, src_dialect)).sql(dialect=src_dialect) if tr.ir is not None else ""
             except Exception:  # noqa: BLE001
                 c["sql"] = ""
             c["sql_status"], c["sql_reviews"], c["explanation"] = tr.status, tr.reviews, tr.explanation

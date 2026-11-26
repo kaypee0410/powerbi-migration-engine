@@ -9,9 +9,9 @@ from sqlglot import exp
 from ..extract.mquery import output_to_source_name, parameter_values, parse_m
 from ..extract.sqllineage import analyze_sql
 from .dax_translate import Translator
-from .ir import Col
+from .ir import Col, Scalar, as_value
 from .querygen import Naming
-from .sqlrender import Renderer, column, ident
+from .sqlrender import Renderer, column, ident, table_ref
 
 
 # Power Query "Changed Type" -> SQL type. Text is left alone (a bare VARCHAR cast truncates in T-SQL).
@@ -102,12 +102,22 @@ def build_view(table: dict, model: dict, sources: dict, translator: Translator, 
         out_name = info.get("source_column") or info["column"]
         return column(back.get(out_name, out_name), "src")
 
-    rnd = Renderer(dialect, col_fn=src_col)
+    def whole_table(s: Scalar) -> exp.Expression:
+        """Whole-table value (an aggregation in a calculated column): a subquery over the same rows the view
+        reads ('src'), or over the other table's view."""
+        if s.table == name:
+            sub = exp.select(Renderer(dialect, col_fn=src_col).r(s.expr)).from_(exp.Table(this=exp.to_identifier("src")))
+        else:
+            sub = exp.select(Renderer(dialect, col_fn=lambda c: column(c.column, "o")).r(s.expr)).from_(
+                table_ref(naming.view(s.table), "o"))
+        return exp.Subquery(this=sub)
+
+    rnd = Renderer(dialect, col_fn=src_col, scalar_fn=whole_table)
     select = []
     for c in cols:
         if c.get("dax"):
             tr = translator.calc_column(name, c["column"], inline_calc=True)
-            e = rnd.r(tr.ir) if tr.ir is not None else exp.Null()
+            e = rnd.r(as_value(tr.ir, dialect)) if tr.ir is not None else exp.Null()
             dax_one_line = " ".join(c["dax"].split())
             e.add_comments([f" DAX: {dax_one_line} "])
             select.append(exp.alias_(e, ident(c["column"])))

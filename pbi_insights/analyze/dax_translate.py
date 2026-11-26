@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 
 from .dax_parser import DaxSyntaxError, functions_used, parse_dax
 from .ir import (Agg, BlankArith, Bin, Case, Col, Fn, InList, IsNull, Lit, Null, Review, SafeDiv, Scalar, Star,
-                 Un, aggs_in, and_, has_agg, is_boolean, override, reviews_in)
+                 Un, aggs_in, and_, cols_in, has_agg, is_boolean, map_aggs, override, reviews_in)
 
 AGG = {"SUM": "SUM", "AVERAGE": "AVG", "MIN": "MIN", "MAX": "MAX", "COUNT": "COUNT", "COUNTA": "COUNT",
        "MEDIAN": "MEDIAN"}
@@ -85,14 +85,16 @@ class _Ctx:
     mode: str = "measure"            # "measure" or "row"
     pred: object = None
     row_tables: tuple = ()
-    vars: tuple = ()                 # ((name, ir), ...)
+    vars: tuple = ()                 # ((name, ir, row depth where it was defined), ...)
     any_table: bool = False          # predicate context: any column may be referenced row by row
     inline_calc: bool = False        # views: expand calculated columns into their SQL
+    calc_col: bool = False           # inside a calculated column: row context, no filter context
 
     def var(self, name: str):
-        for n, v in reversed(self.vars):
+        """(ir, row depth at definition) of a variable, or None."""
+        for n, v, depth in reversed(self.vars):
             if n.lower() == name.lower():
-                return v
+                return v, depth
         return None
 
 
@@ -133,7 +135,8 @@ class Translator:
         c = self.idx.columns.get((table, column))
         if not c or not c.get("dax"):
             return Translation(status="Not calculated")
-        return self._run(c["dax"], _Ctx(host=table, mode="row", row_tables=(table,), inline_calc=inline_calc),
+        return self._run(c["dax"], _Ctx(host=table, mode="row", row_tables=(table,), inline_calc=inline_calc,
+                                        calc_col=True),
                          self_name=f"{table}[{column}]")
 
     def expression(self, dax: str, host: str, mode: str = "measure") -> Translation:
@@ -158,6 +161,8 @@ class Translator:
             self._stack.append(self_name)
         try:
             res.ir = self.tr(ast, ctx)
+            if ctx.calc_col:
+                res.ir = map_aggs(res.ir, self.whole_table)
         except RecursionError:
             res.ir = Review("expression too deeply nested")
         finally:
@@ -184,6 +189,25 @@ class Translator:
     def review(self, reason: str) -> Review:
         self.acc.add(self.acc.reviews, reason)
         return Review(reason)
+
+    def whole_table(self, a: Agg):
+        """An aggregate in a calculated column: DAX computes it at refresh with no filters, so it is the
+        same whole-table value on every row: a subquery over the table, never an aggregate in the view."""
+        others = sorted({c.table for c in cols_in(a)} - {a.table})
+        if others:
+            return self.review(f"aggregation over {a.table} in a calculated column uses columns of "
+                               f"{', '.join(others)} (the current row, or RELATED): needs a correlated subquery "
+                               f"or a join")
+        if (self.idx.tables.get(a.table) or {}).get("calculated"):
+            return self.review(f"aggregation over the DAX calculated table {a.table}, which has no generated view")
+        self.pattern("Whole-table aggregate (calculated column)")
+        note = (f"In a calculated column, an aggregation over {a.table} is computed once over the whole table "
+                f"(no filters), so every row gets the same value; the SQL uses a subquery over {a.table}.")
+        self.note(note)
+        if a.func == "COUNT":
+            # DAX counts over no rows are BLANK, SQL COUNT is 0
+            return Scalar(Case(((Bin("=", a, Lit(0)), Null()),), a), a.table, note)
+        return Scalar(a, a.table, note)
 
     def row_pred(self, pred):
         """A row-level filter must not contain an aggregate: SUM(CASE WHEN x >= MAX(y) ...) is invalid SQL.
@@ -215,8 +239,16 @@ class Translator:
                 return self.measure_ref(m, ctx)
             return self.column_ref(ctx.host, n[1], ctx)
         if k == "name":
-            v = ctx.var(n[1])
-            if v is not None:
+            entry = ctx.var(n[1])
+            if entry is not None:
+                v, depth = entry
+                if len(ctx.row_tables) > depth and _row_values(v):
+                    # VAR x = T[c] RETURN ... FILTER(T, T[c] <= x): x is the OUTER row's value (the EARLIER
+                    # pattern). In SQL it would look like the iterated column and the filter would become
+                    # T.c <= T.c, so flag it instead.
+                    return self.review(f"variable {n[1]} holds a value of the outer row and is used inside an "
+                                       f"iteration (EARLIER pattern: running total, rank ...): needs a "
+                                       f"correlated subquery or a window function")
                 return v
             if self.idx.table(n[1]):
                 return self.review(f"table {n[1]} used where a value is expected")
@@ -226,7 +258,7 @@ class Translator:
         if k == "var":
             c = ctx
             for name, e in n[1]:
-                c = replace(c, vars=c.vars + ((name, self.tr(e, c)),))
+                c = replace(c, vars=c.vars + ((name, self.tr(e, c), len(c.row_tables)),))
             return self.tr(n[2], c)
         if k == "neg":
             x = self.tr(n[1], ctx)
@@ -434,18 +466,25 @@ class Translator:
                 return self.review("SELECTEDVALUE over an expression")
             alt = self.tr(a[1], ctx) if len(a) > 1 else Null()
             self.note("SELECTEDVALUE becomes 'the single value in each row of the visual' (COUNT DISTINCT = 1).")
+            self.note("SELECTEDVALUE / HASONEVALUE count BLANK as a value; COUNT(DISTINCT) ignores NULL.")
             return Case(((Bin("=", Agg("COUNT", Col(*col), col[0], True, ctx.pred), Lit(1)),
                           Agg("MAX", Col(*col), col[0], False, ctx.pred)),), alt)
         if name == "HASONEVALUE":
             col = self.column_arg(a[0], ctx) if a else None
             if not col:
                 return self.review("HASONEVALUE over an expression")
+            self.note("SELECTEDVALUE / HASONEVALUE count BLANK as a value; COUNT(DISTINCT) ignores NULL.")
             return Bin("=", Agg("COUNT", Col(*col), col[0], True, ctx.pred), Lit(1))
         if name == "RELATED":
             col = self.column_arg(a[0], ctx) if a else None
             if not col:
                 return self.review("RELATED over an expression")
             self.pattern("Uses RELATED (join)")
+            if len(ctx.row_tables) > 1 and col[0] == ctx.row_tables[-1]:
+                # FILTER(Store, Store[Region] = RELATED(Store[Region])): RELATED cannot start from the row of
+                # the table being iterated, so it reads the OUTER row (EARLIER pattern)
+                return self.review(f"RELATED({col[0]}[{col[1]}]) inside an iteration over {col[0]} reads the outer "
+                                   f"row (EARLIER pattern): needs a correlated subquery")
             return Col(*col) if ctx.mode == "row" or ctx.row_tables else self.review("RELATED outside row context")
         if name == "FORMAT":
             return self.format_(a, ctx)
@@ -559,6 +598,9 @@ class Translator:
     def calculate(self, a, ctx: _Ctx):
         if not a:
             return Null()
+        if ctx.calc_col:
+            return self.review("CALCULATE in a calculated column turns the current row into filters (context "
+                               "transition): needs a correlated subquery")
         expr, filters = a[0], a[1:]
         pred, independent = ctx.pred, None
         pctx = replace(ctx, mode="row", any_table=True)
@@ -623,6 +665,16 @@ class Translator:
         if f[0] in ("table", "name") and self.table_arg(f):
             return "review", "a whole table used as a filter"
         return "pred", self.cond(f, pctx)
+
+
+def _row_values(ir) -> bool:
+    """Does this value read columns of a row directly (not inside an aggregation or a separate value)?"""
+    if isinstance(ir, Col):
+        return True
+    if isinstance(ir, (Agg, Scalar)):
+        return False
+    from .ir import children
+    return any(_row_values(c) for c in children(ir))
 
 
 def dax_date_format_to_strftime(fmt: str) -> str:
