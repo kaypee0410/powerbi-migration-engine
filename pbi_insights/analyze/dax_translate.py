@@ -264,7 +264,7 @@ class Translator:
             x = self.tr(n[1], ctx)
             return Lit(-x.value) if isinstance(x, Lit) and isinstance(x.value, (int, float)) else Un("NEG", x)
         if k == "not":
-            return Un("NOT", self.cond(n[1], ctx))
+            return self.negate(self.cond(n[1], ctx))
         if k == "in":
             return self.in_list(n[1], n[2], ctx)
         if k == "bin":
@@ -379,13 +379,69 @@ class Translator:
             self.note("Blank + / - blank gives 0 in the SQL where DAX gives BLANK (only matters when a row has no data on either side).")
         return BlankArith(op, L, R)
 
+    def blank_as(self, x):
+        """What a BLANK means when compared with x: Lit(0) for numbers, Lit("") for text, "date", or None."""
+        if isinstance(x, Agg):
+            if x.func in ("SUM", "AVG", "COUNT"):
+                return Lit(0)
+            x = x.arg
+        if isinstance(x, Col):
+            dt = (self.idx.columns.get((x.table, x.column)) or {}).get("data_type")
+            if dt in ("Whole number", "Decimal number", "Fixed decimal"):
+                return Lit(0)
+            if dt == "Text":
+                return Lit("")
+            if dt == "Date/time":
+                return "date"
+        return None
+
+    def compare_blank(self, op, x):
+        """x op BLANK(): DAX treats BLANK as 0 / "" in comparisons (only == is strict)."""
+        if isinstance(x, Null):
+            return Lit(op in ("=", "==", "<=", ">="))
+        if op == "==":
+            return IsNull(x)
+        sub = self.blank_as(x)
+        if isinstance(sub, Lit):
+            return self.compare(op, x, sub)
+        if sub == "date" and op in ("=", "<>"):
+            self.note("A blank date equals 1899-12-30 in DAX; the SQL only treats NULL as blank.")
+            return IsNull(x) if op == "=" else Un("NOT", IsNull(x))
+        return self.review(f"comparison with BLANK() ({op}) on a value of unknown type: "
+                           f"DAX treats BLANK as 0 or an empty text")
+
+    def negate(self, c):
+        """NOT that keeps DAX's BLANK rules: NOT(Amount > 6) is TRUE for a blank Amount (BLANK > 6 is FALSE),
+        while SQL's NOT (NULL > 6) is NULL and drops the row."""
+        if isinstance(c, Bin) and c.op in ("AND", "OR"):
+            return Bin("OR" if c.op == "AND" else "AND", self.negate(c.left), self.negate(c.right))
+        if isinstance(c, IsNull):
+            return Un("NOT", c)
+        col = None
+        if isinstance(c, Bin) and c.op in _CMP:
+            col = next((x for x in (c.left, c.right) if isinstance(x, Col)), None)
+            other = c.right if col is c.left else c.left
+            if not (isinstance(other, Lit) or _is_date_value(other)):
+                col = None
+        elif isinstance(c, InList) and isinstance(c.x, Col):
+            col = c.x
+        return Bin("OR", Un("NOT", c), IsNull(col)) if col is not None else Un("NOT", c)
+
     def compare(self, op, L, R):
+        if isinstance(L, Null) or isinstance(R, Null):
+            flipped = {"<": ">", ">": "<", "<=": ">=", ">=": "<="}
+            return self.compare_blank(op, L) if isinstance(R, Null) else self.compare_blank(flipped.get(op, op), R)
         sql_op = "=" if op in ("=", "==") else op
         if op != "==":
             if has_agg(L) and isinstance(R, Lit) and not isinstance(L, Lit):
                 L = Fn("COALESCE", (L, Lit(0 if isinstance(R.value, (int, float)) else "")))
             elif has_agg(R) and isinstance(L, Lit):
                 R = Fn("COALESCE", (R, Lit(0 if isinstance(L.value, (int, float)) else "")))
+            else:
+                blank = _blank_matches(sql_op, L, R)
+                if blank is not None:
+                    # DAX compares BLANK as 0 / "": Discount = 0, Qty < 5 and Region <> "East" all keep blank rows
+                    return Bin("OR", Bin(sql_op, L, R), IsNull(blank))
         return Bin(sql_op, L, R)
 
     def in_list(self, x, values, ctx: _Ctx):
@@ -448,7 +504,7 @@ class Translator:
         if name in ("AND", "OR"):
             return Bin(name, self.cond(a[0], ctx), self.cond(a[1], ctx))
         if name == "NOT":
-            return Un("NOT", self.cond(a[0], ctx))
+            return self.negate(self.cond(a[0], ctx))
         if name == "ISBLANK":
             return IsNull(self.tr(a[0], ctx))
         if name == "BLANK":
@@ -546,7 +602,7 @@ class Translator:
         else:
             subject = self.tr(first, ctx)
             for i in range(0, len(pairs), 2):
-                whens.append((Bin("=", subject, self.tr(pairs[i], ctx)), self.tr(pairs[i + 1], ctx)))
+                whens.append((self.compare("=", subject, self.tr(pairs[i], ctx)), self.tr(pairs[i + 1], ctx)))
         return Case(tuple(whens), default)
 
     def format_(self, a, ctx: _Ctx):
@@ -602,25 +658,41 @@ class Translator:
             return self.review("CALCULATE in a calculated column turns the current row into filters (context "
                                "transition): needs a correlated subquery")
         expr, filters = a[0], a[1:]
-        pred, independent = ctx.pred, None
+        independent = None
+        # Filters of THIS CALCULATE intersect with each other. Boolean filters ("pred") replace outer filters
+        # (visual or an outer CALCULATE) on the same columns; KEEPFILTERS and FILTER(T, ...) ("keep", "table")
+        # never replace anything: FILTER(T, ...) is evaluated inside the outer filters, so it intersects.
+        new, kept, table_filter = None, None, False
         pctx = replace(ctx, mode="row", any_table=True)
         for f in filters:
             kind, payload = self.filter_arg(f, pctx)
-            if kind == "pred":
+            if kind in ("pred", "keep", "table"):
                 payload = self.row_pred(payload)
                 if isinstance(payload, Review):
                     return payload
-                pred = override(pred, payload)
+                if kind == "pred":
+                    new = and_(new, payload)
+                else:
+                    kept = and_(kept, payload)
+                    table_filter = table_filter or kind == "table"
             elif kind == "all":
                 checked = self.row_pred(payload[1])
                 if isinstance(checked, Review):
                     return checked
-                independent = payload
+                if independent and independent[0] != payload[0]:
+                    return self.review(f"FILTER(ALL(...)) on two tables ({independent[0]}, {payload[0]}) in one "
+                                       f"CALCULATE: needs a separate dataset")
+                independent = (payload[0], and_(independent[1] if independent else None, payload[1]))
             else:
                 return self.review(payload)
+        if table_filter and new is not None and set(cols_in(new)) & set(cols_in(ctx.pred)):
+            # FILTER(T, ...) carries the outer filter on a column that a sibling boolean filter replaces
+            return self.review("FILTER(table, ...) next to a filter that replaces an outer filter on the same "
+                               "column: the FILTER keeps the outer filter, check the result by hand")
+        pred = and_(override(ctx.pred, new), kept)
         if independent:
             table, cond = independent
-            inner = self.tr(expr, replace(ctx, pred=cond))
+            inner = self.tr(expr, replace(ctx, pred=and_(and_(cond, new), kept)))
             agg_tables = {x.table for x in aggs_in(inner)}
             lookup = set(self.graph.reachable(table)) if self.graph else set()
             if agg_tables and agg_tables <= ({table} | lookup):
@@ -642,7 +714,7 @@ class Translator:
                 tbl, cond = a
                 t = self.table_arg(tbl)
                 if t:
-                    return "pred", self.cond(cond, replace(pctx, row_tables=(t,)))
+                    return "table", self.cond(cond, replace(pctx, row_tables=(t,)))
                 if tbl[0] == "func" and tbl[1] in ("ALL", "ALLNOBLANKROW", "REMOVEFILTERS") and tbl[2]:
                     ts = [self.table_arg(x) for x in tbl[2]]
                     if len(ts) == 1 and ts[0]:
@@ -651,8 +723,12 @@ class Translator:
                         return "pred", self.cond(cond, pctx)          # FILTER(ALL(col), cond) == boolean filter
                 return "review", "FILTER over a computed table (VALUES, ALLSELECTED ...)"
             if name == "KEEPFILTERS" and a:
-                self.note("KEEPFILTERS: the filter intersects instead of replacing; SQL does the same.")
-                return self.filter_arg(a[0], pctx)
+                kind, payload = self.filter_arg(a[0], pctx)
+                if kind in ("pred", "table"):
+                    return "keep", payload
+                if kind == "all":       # KEEPFILTERS(FILTER(ALL(T), cond)): intersects with the visual's filters
+                    return "keep", payload[1]
+                return kind, payload
             if name in FILTER_MODIFIERS:
                 return "review", f"{name}(...) removes filters: needs a window function or a separate dataset"
             if name in RELATIONSHIP_FNS:
@@ -665,6 +741,35 @@ class Translator:
         if f[0] in ("table", "name") and self.table_arg(f):
             return "review", "a whole table used as a filter"
         return "pred", self.cond(f, pctx)
+
+
+_CMP = {"=": lambda a, b: a == b, "<>": lambda a, b: a != b, "<": lambda a, b: a < b,
+        ">": lambda a, b: a > b, "<=": lambda a, b: a <= b, ">=": lambda a, b: a >= b}
+
+
+def _is_date_value(x) -> bool:
+    return isinstance(x, Fn) and x.name in ("DATE", "CURRENT_DATE", "CURRENT_TIMESTAMP", "TIMESTAMP_LIT")
+
+
+def _blank_matches(op: str, L, R):
+    """The column of `column op literal` when DAX would count a BLANK in that column as a match, else None."""
+    if isinstance(L, Col):
+        col, lit, flipped = L, R, False
+    elif isinstance(R, Col):
+        col, lit, flipped = R, L, True
+    else:
+        return None
+    if _is_date_value(lit):
+        # a blank date is 1899-12-30 in DAX: earlier than any real date
+        before = {"<": ">", ">": "<", "<=": ">=", ">=": "<="}.get(op, op) if flipped else op
+        return col if before in ("<", "<=", "<>") else None
+    if not isinstance(lit, Lit) or isinstance(lit.value, bool) or not isinstance(lit.value, (int, float, str)):
+        return None
+    blank = "" if isinstance(lit.value, str) else 0
+    a, b = (lit.value, blank) if flipped else (blank, lit.value)
+    if isinstance(a, str):          # DAX text comparison ignores case
+        a, b = a.lower(), b.lower()
+    return col if _CMP[op](a, b) else None
 
 
 def _row_values(ir) -> bool:

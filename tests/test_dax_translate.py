@@ -207,3 +207,104 @@ def test_true_false_calculated_column_is_valid_tsql(model):
     body = view["sql"].split("CREATE VIEW vw_sales AS", 1)[1].rstrip(";")
     parse_one(body, read="tsql")
     assert "THEN 1" in body and "THEN 0" in body, body
+
+
+# ---- CALCULATE filter semantics ----------------------------------------------------------------------
+def _measure_values(model, names, rows=None):
+    """Evaluate measures (no visual filters) on a small Sales table: (StoreID, Scenario, Amount)."""
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE vw_sales (StoreID INTEGER, Scenario INTEGER, Amount REAL, Day TEXT)")
+    con.execute("CREATE VIEW Sales AS SELECT * FROM vw_sales")      # filter-independent values read 'Sales'
+    rows = rows or [(1, 1, 10.0), (1, 1, 20.0), (1, 2, 5.0), (2, 1, 30.0), (3, 1, 7.0), (3, 2, 9.0)]
+    con.executemany("INSERT INTO vw_sales VALUES (?, ?, ?, ?)",
+                    [r if len(r) == 4 else (*r, "2026-01-15 00:00:00") for r in rows])
+    out = {}
+    for name in names:
+        t, s = sql(model, name, "sqlite")
+        out[name] = (t, con.execute(f"SELECT {s} FROM vw_sales AS Sales").fetchone()[0])
+    return out
+
+
+def test_keepfilters_intersects_with_an_outer_filter(model):
+    _with_measures(model, **{
+        "Keep": "CALCULATE(CALCULATE([Total], KEEPFILTERS(Sales[Scenario] = 1)), Sales[Scenario] = 2)",
+        "Replace": "CALCULATE(CALCULATE([Total], Sales[Scenario] = 1), Sales[Scenario] = 2)",
+        "Both In One": "CALCULATE([Total], Sales[Scenario] = 1, Sales[Scenario] = 2)",
+        "Outer Over TY": "CALCULATE([TY], Sales[Scenario] = 2)",
+    })
+    got = _measure_values(model, ["Keep", "Replace", "Both In One", "Outer Over TY"])
+    assert got["Keep"][1] is None              # Scenario 1 AND 2: no rows, BLANK
+    assert got["Replace"][1] == 67.0           # the inner filter replaces the outer one: Scenario 1
+    assert got["Both In One"][1] is None       # filters of the same CALCULATE intersect
+    assert got["Outer Over TY"][1] == 67.0     # [TY]'s own filter wins over the outer one
+    assert all(t.status.startswith("Translated") for t, _ in got.values())
+
+
+def test_comparisons_treat_blank_as_zero_like_dax(model):
+    _with_measures(model, **{
+        "Zero Rows": "CALCULATE(COUNTROWS(Sales), Sales[Amount] = 0)",
+        "Small Rows": "CALCULATE(COUNTROWS(Sales), Sales[Amount] < 6)",
+        "Big Rows": "CALCULATE(COUNTROWS(Sales), Sales[Amount] > 6)",
+        "Not Ten": "CALCULATE(COUNTROWS(Sales), Sales[Amount] <> 10)",
+        "Strict Zero": "CALCULATE(COUNTROWS(Sales), Sales[Amount] == 0)",
+        "Zero Rows 2": "COUNTROWS(FILTER(Sales, 0 = Sales[Amount]))",
+    })
+    rows = [(1, 1, 10.0), (1, 1, None), (2, 1, 5.0), (2, 2, 0.0), (3, 1, None), (3, 2, 30.0)]
+    got = {k: v[1] for k, v in _measure_values(model, ["Zero Rows", "Small Rows", "Big Rows", "Not Ten",
+                                                       "Strict Zero", "Zero Rows 2"], rows).items()}
+    # BLANK = 0 and BLANK < 6 are TRUE in DAX; BLANK > 6 is FALSE; == is strict
+    assert got == {"Zero Rows": 3, "Small Rows": 4, "Big Rows": 2, "Not Ten": 5, "Strict Zero": 1,
+                   "Zero Rows 2": 3}
+
+
+def test_text_comparison_keeps_blank_rows_like_dax(model):
+    import sqlite3
+    _with_measures(model, **{"Not East": "CALCULATE(COUNTROWS(Store), Store[Region] <> \"East\")"})
+    model["measures"][-1]["table"] = "Store"
+    t, s = sql(model, "Not East", "sqlite")
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE vw_store (StoreID INTEGER, Region TEXT)")
+    con.executemany("INSERT INTO vw_store VALUES (?, ?)", [(1, "East"), (2, "West"), (3, None)])
+    assert con.execute(f"SELECT {s} FROM vw_store AS Store").fetchone()[0] == 2   # West + the blank region
+
+
+def test_filter_and_keepfilters_intersect_with_outer_filters(model):
+    _with_measures(model, **{
+        # FILTER(T, ...) is evaluated inside the outer filters, so it intersects (Scenario 1 AND 2: BLANK)
+        "Filter In Outer": "CALCULATE(CALCULATE([Total], FILTER(Sales, Sales[Scenario] = 1)), Sales[Scenario] = 2)",
+        # KEEPFILTERS(FILTER(ALL(T), ...)) still respects the outer filter (store 1): 20, not 50
+        "Keep All": "CALCULATE(CALCULATE([Total], KEEPFILTERS(FILTER(ALL(Sales), Sales[Amount] > 10))), "
+                    "Sales[StoreID] = 1)",
+        # FILTER(ALL(T), ...) and a sibling filter in one CALCULATE intersect: 67, not 76
+        "All And Sibling": "CALCULATE([Total], FILTER(ALL(Sales), Sales[Amount] > 6), Sales[Scenario] = 1)",
+    })
+    got = _measure_values(model, ["Filter In Outer", "Keep All", "All And Sibling"])
+    assert got["Filter In Outer"][1] is None
+    assert got["Keep All"][1] == 20.0
+    assert got["All And Sibling"][1] == 67.0
+    assert all(t.status.startswith("Translated") for t, _ in got.values()), {k: v[0].reviews for k, v in got.items()}
+
+
+def test_comparisons_with_blank_function_follow_dax(model):
+    rows = [(1, 1, 10.0), (1, 1, None), (2, 1, 5.0), (2, 2, 0.0), (3, 1, None), (3, 2, 30.0)]
+    _with_measures(model, **{
+        "Not Blank": "COUNTROWS(FILTER(Sales, Sales[Amount] <> BLANK()))",     # neither blank nor 0
+        "Is Blank": "COUNTROWS(FILTER(Sales, Sales[Amount] = BLANK()))",       # blank or 0
+        "Strict Blank": "COUNTROWS(FILTER(Sales, Sales[Amount] == BLANK()))",  # blank only
+        "Total Is Blank": "IF([Total] = BLANK(), 1, 0)",
+        "Not Big": "CALCULATE(COUNTROWS(Sales), NOT(Sales[Amount] > 6))",      # BLANK > 6 is FALSE, NOT gives TRUE
+        "Switch Zero": "SUMX(Sales, SWITCH(Sales[Amount], 0, 1, 0))",          # SWITCH compares with =
+    })
+    got = {k: v[1] for k, v in _measure_values(model, ["Not Blank", "Is Blank", "Strict Blank", "Total Is Blank",
+                                                       "Not Big", "Switch Zero"], rows).items()}
+    assert got == {"Not Blank": 3, "Is Blank": 3, "Strict Blank": 2, "Total Is Blank": 0, "Not Big": 4,
+                   "Switch Zero": 3}
+
+
+def test_blank_date_is_before_every_date(model):
+    rows = [(1, 1, 1.0, "2025-06-01 00:00:00"), (1, 1, 1.0, None), (1, 1, 1.0, "2026-06-01 00:00:00")]
+    _with_measures(model, **{"Before 2026": "COUNTROWS(FILTER(Sales, Sales[Day] < DATE(2026, 1, 1)))",
+                             "From 2026": "COUNTROWS(FILTER(Sales, Sales[Day] >= DATE(2026, 1, 1)))"})
+    got = {k: v[1] for k, v in _measure_values(model, ["Before 2026", "From 2026"], rows).items()}
+    assert got == {"Before 2026": 2, "From 2026": 1}
