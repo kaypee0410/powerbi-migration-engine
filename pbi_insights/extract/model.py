@@ -115,7 +115,8 @@ def from_vertipaq(path) -> dict:
     # ---- columns ----------------------------------------------------------------------------
     cdf = _q(db, """SELECT c.ID, t.Name AS TableName, c.ExplicitName, c.InferredName, c.Type, c.ExplicitDataType,
                       c.InferredDataType, c.DataCategory, c.IsHidden, c.IsKey, c.SummarizeBy, c.SourceColumn,
-                      c.Expression, c.FormatString, s.ExplicitName AS SortBy, c.Description, c.DisplayFolder
+                      c.Expression, c.FormatString, COALESCE(NULLIF(s.ExplicitName, ''), s.InferredName) AS SortBy,
+                      c.Description, c.DisplayFolder
                     FROM [Column] c JOIN [Table] t ON t.ID = c.TableID
                     LEFT JOIN [Column] s ON s.ID = c.SortByColumnID""")
     for r in cdf.itertuples():
@@ -152,24 +153,26 @@ def from_vertipaq(path) -> dict:
 
     # ---- relationships --------------------------------------------------------------------------
     rdf = _q(db, """SELECT r.ID, r.IsActive, r.CrossFilteringBehavior, r.FromCardinality, r.ToCardinality,
-                      ft.Name AS FromTable, fc.ExplicitName AS FromColumn, tt.Name AS ToTable, tc.ExplicitName AS ToColumn
+                      ft.Name AS FromTable, COALESCE(NULLIF(fc.ExplicitName, ''), fc.InferredName) AS FromColumn,
+                      tt.Name AS ToTable, COALESCE(NULLIF(tc.ExplicitName, ''), tc.InferredName) AS ToColumn
                     FROM Relationship r JOIN [Table] ft ON ft.ID = r.FromTableID JOIN [Column] fc ON fc.ID = r.FromColumnID
                     JOIN [Table] tt ON tt.ID = r.ToTableID LEFT JOIN [Column] tc ON tc.ID = r.ToColumnID""")
     for r in rdf.itertuples():
         out["relationships"].append({
-            "from_table": r.FromTable, "from_column": r.FromColumn, "to_table": r.ToTable,
+            "from_table": r.FromTable, "from_column": _s(r.FromColumn), "to_table": r.ToTable,
             "to_column": _s(r.ToColumn) or "Date", "from_cardinality": CARD.get(r.FromCardinality, "many"),
             "to_cardinality": CARD.get(r.ToCardinality, "one"),
             "cross_filter": CROSSFILTER.get(r.CrossFilteringBehavior, str(r.CrossFilteringBehavior)),
             "active": bool(r.IsActive), "auto_date": is_auto_date(r.ToTable) or is_auto_date(r.FromTable)})
 
     # ---- hierarchies, RLS, shared expressions, data sources ------------------------------------
-    hdf = _q(db, """SELECT t.Name AS TableName, h.Name AS Hierarchy, l.Name AS Level, l.Ordinal, c.ExplicitName AS ColumnName
+    hdf = _q(db, """SELECT t.Name AS TableName, h.Name AS Hierarchy, l.Name AS Level, l.Ordinal,
+                      COALESCE(NULLIF(c.ExplicitName, ''), c.InferredName) AS ColumnName
                     FROM Level l JOIN Hierarchy h ON h.ID = l.HierarchyID JOIN [Table] t ON t.ID = h.TableID
                     JOIN [Column] c ON c.ID = l.ColumnID""")
     if hdf is not None:
         out["hierarchies"] = [{"table": r.TableName, "hierarchy": r.Hierarchy, "level": r.Level,
-                               "ordinal": int(r.Ordinal), "column": r.ColumnName}
+                               "ordinal": int(r.Ordinal), "column": _s(r.ColumnName)}
                               for r in hdf.itertuples() if not is_auto_date(r.TableName)]
     roles = _q(db, """SELECT ro.Name AS RoleName, t.Name AS TableName, tp.FilterExpression
                       FROM TablePermission tp JOIN Role ro ON ro.ID = tp.RoleID JOIN [Table] t ON t.ID = tp.TableID""")

@@ -185,6 +185,19 @@ class Translator:
         self.acc.add(self.acc.reviews, reason)
         return Review(reason)
 
+    def row_pred(self, pred):
+        """A row-level filter must not contain an aggregate: SUM(CASE WHEN x >= MAX(y) ...) is invalid SQL.
+
+        In DAX, an aggregate inside a FILTER/CALCULATE condition (SELECTEDVALUE(T[c]), MAX(T[c]) ...) ignores
+        the row context and is evaluated once over the visual cell's filters. That needs a per-cell subquery
+        the generator does not build, so flag it. Values computed on their own (Scalar) are fine.
+        """
+        if pred is not None and not isinstance(pred, Review) and aggs_in(pred):
+            return self.review("aggregation inside a filter condition (SELECTEDVALUE, MAX, a variable holding one, "
+                               "CALCULATE ...): DAX does not evaluate it row by row; needs a per-cell subquery or "
+                               "a parameter")
+        return pred
+
     # ---- node dispatch -----------------------------------------------------------------------------
     def tr(self, n, ctx: _Ctx):
         k = n[0]
@@ -514,7 +527,9 @@ class Translator:
         if n[0] == "func" and n[1] == "FILTER" and len(n[2]) == 2:
             t = self.table_arg(n[2][0])
             if t:
-                cond = self.cond(n[2][1], replace(ctx, mode="row", row_tables=ctx.row_tables + (t,)))
+                cond = self.row_pred(self.cond(n[2][1], replace(ctx, mode="row", row_tables=ctx.row_tables + (t,))))
+                if isinstance(cond, Review):
+                    return cond
                 return Agg("COUNT", Star(), t, False, and_(ctx.pred, cond))
         if n[0] == "func" and n[1] in ("VALUES", "DISTINCT") and n[2]:
             col = self.column_arg(n[2][0], ctx)
@@ -531,7 +546,9 @@ class Translator:
         if not t and tbl[0] == "func" and tbl[1] == "FILTER" and len(tbl[2]) == 2:
             t = self.table_arg(tbl[2][0])
             if t:
-                extra = self.cond(tbl[2][1], replace(ctx, mode="row", row_tables=ctx.row_tables + (t,)))
+                extra = self.row_pred(self.cond(tbl[2][1], replace(ctx, mode="row", row_tables=ctx.row_tables + (t,))))
+                if isinstance(extra, Review):
+                    return extra
         if not t:
             return self.review(f"{name} over a grouped or computed table: needs a GROUP BY subquery")
         row = self.tr(expr, replace(ctx, mode="row", row_tables=ctx.row_tables + (t,), any_table=False))
@@ -548,8 +565,14 @@ class Translator:
         for f in filters:
             kind, payload = self.filter_arg(f, pctx)
             if kind == "pred":
+                payload = self.row_pred(payload)
+                if isinstance(payload, Review):
+                    return payload
                 pred = override(pred, payload)
             elif kind == "all":
+                checked = self.row_pred(payload[1])
+                if isinstance(checked, Review):
+                    return checked
                 independent = payload
             else:
                 return self.review(payload)

@@ -139,6 +139,29 @@ class QueryBuilder:
             sub = sub.where(self._renderer(al).r(hoist))
         return exp.Subquery(this=sub)
 
+    def _members(self, table: str, dims: list, filters: list, plan: QueryPlan) -> exp.Select:
+        """Distinct values of one table's columns, with the filters that reach that table.
+
+        Power BI groups columns of different tables as a cross join (keeping only combinations that exist
+        within one table), then drops rows where every measure is blank. One of these per table, CROSS
+        JOINed, reproduces that for columns no measure table can reach.
+        """
+        al = _Aliases()
+        al(table)
+        reach = self._reach(table)
+        flt = [f for f in filters if {c.table for c in cols_in(f.ir)} <= reach]
+        cols = []
+        for d in dims:
+            cols.append(exp.alias_(column(d.column, al(d.table)), d.out) if d.out != d.column
+                        else column(d.column, al(d.table)))
+            if d.sort_by:
+                cols.append(exp.alias_(column(d.sort_by, al(d.table)), d.sort_out) if d.sort_out != d.sort_by
+                            else column(d.sort_by, al(d.table)))
+        needed = {c.table for f in flt for c in cols_in(f.ir)} & reach
+        sel = self._from(exp.select(*cols).distinct(), table, needed, al, plan)
+        where = self._and([self._renderer(al).r(f.ir) for f in flt])
+        return sel.where(where) if where is not None else sel
+
     @staticmethod
     def _and(conds: list) -> exp.Expression | None:
         out = None
@@ -219,7 +242,7 @@ class QueryBuilder:
             t = next(iter(groups))
             if len(info[t]["keys"]) == len(dims):
                 return self._single(t, info[t], dims, measures, sorts, plan)
-        return self._multi(info, dims, measures, sorts, plan)
+        return self._multi(info, dims, measures, filters, sorts, plan)
 
     def _name_outputs(self, dims: list[Dim], measures: list[MeasureSpec]):
         used = set()
@@ -284,7 +307,7 @@ class QueryBuilder:
         return plan
 
     # ---- several grains: one CTE per aggregated table ---------------------------------------------
-    def _multi(self, info, dims, measures, sorts, plan: QueryPlan) -> QueryPlan:
+    def _multi(self, info, dims, measures, filters, sorts, plan: QueryPlan) -> QueryPlan:
         al = _Aliases()
         for t in info:
             al(t)
@@ -314,7 +337,16 @@ class QueryBuilder:
             ctes.append((name, t, inf, sel))
         # base CTE: covers the most dimensions; prefer a fact table on ties
         base = max(ctes, key=lambda c: (len(c[2]["keys"]), not self.graph.is_dimension(c[1]), -ctes.index(c)))
-        missing = [d for d in dims if d not in base[2]["keys"]]
+        # columns no measure table reaches: Power BI repeats each measure value for every member, which is
+        # a CROSS JOIN with that table's distinct values
+        unrelated: dict[str, list] = {}
+        for d in dims:
+            if not any(d in c[2]["keys"] for c in ctes):
+                unrelated.setdefault(d.table, []).append(d)
+        members = [(f"u{i}_{snake(t)}", t, self._members(t, ds, filters, plan))
+                   for i, (t, ds) in enumerate(unrelated.items(), start=1)]
+        member_of = {d.table: name for name, t, _ in members for d in unrelated[t]}
+        missing = [d for d in dims if d not in base[2]["keys"] and d.table not in member_of]
         if missing:
             plan.reviews.append("dimensions " + ", ".join(f"{d.table}[{d.column}]" for d in missing)
                                 + " are not related to the measure tables: add a dimension scaffold")
@@ -323,7 +355,8 @@ class QueryBuilder:
                        scalar_fn=lambda s: self._scalar(s, al))
         cols, src_of = [], {}
         for d in dims:
-            src = base[0] if d in base[2]["keys"] else next((c[0] for c in ctes if d in c[2]["keys"]), base[0])
+            src = base[0] if d in base[2]["keys"] else next((c[0] for c in ctes if d in c[2]["keys"]),
+                                                            member_of.get(d.table))
             src_of[id(d)] = src
             cols.append(column(d.out, src))
             if d.sort_by:
@@ -340,6 +373,8 @@ class QueryBuilder:
                 sel = sel.join(exp.to_table(name), on=on, join_type="left")
             else:
                 sel = sel.join(exp.to_table(name), join_type="cross")
+        for name, _, _ in members:
+            sel = sel.join(exp.to_table(name), join_type="cross")
         if dims and all(can_be_null(m.ir) for m in measures):
             sel = sel.where(_or([not_null(e.copy()) for _, e in meas]))
         order = self._order(sorts,
@@ -350,6 +385,8 @@ class QueryBuilder:
             sel = sel.order_by(*order)
         for name, _, _, cte_sel in ctes:
             sel = sel.with_(name, as_=cte_sel)
+        for name, _, m_sel in members:
+            sel = sel.with_(name, as_=m_sel)
         plan.form = "multi-grain"
         plan.notes.append("Aggregates come from different tables (" + ", ".join(info) + "): each is computed at its "
                           "own grain in a CTE and joined on the shared dimensions, so nothing is double counted.")
@@ -393,10 +430,32 @@ class QueryBuilder:
         cols = [exp.alias_(rnd.r(m.ir), m.out) for m in measures]
         sel = exp.select(*cols)
         if dims:
-            base = dims[0].table
-            al(base)
-            sel = exp.select(*[column(d.column, al(d.table)) for d in dims], *cols).distinct()
-            sel = self._from(sel, base, {d.table for d in dims}, al, plan)
+            # No measure is ever blank here, so Power BI shows every combination: the cross join of each
+            # table's own distinct values (filtered by what reaches that table).
+            by_table: dict[str, list] = {}
+            for d in dims:
+                by_table.setdefault(d.table, []).append(d)
+            members = [(f"m{i}_{snake(t)}", t, self._members(t, ds, filters, plan))
+                       for i, (t, ds) in enumerate(by_table.items(), start=1)]
+            src = {t: name for name, t, _ in members}
+            dim_cols = []
+            for d in dims:
+                dim_cols.append(column(d.out, src[d.table]))
+                if d.sort_by:
+                    dim_cols.append(column(d.sort_out, src[d.table]))
+            sel = exp.select(*dim_cols, *cols).from_(exp.to_table(members[0][0]))
+            for name, _, _ in members[1:]:
+                sel = sel.join(exp.to_table(name), join_type="cross")
+            if all(can_be_null(m.ir) for m in measures):
+                # Power BI drops rows where every measure is blank; the values are constant here, so the
+                # database can decide this once instead of building the whole cross join
+                sel = sel.where(_or([not_null(c.this.copy()) for c in cols]))
+            order = self._order(sorts, lambda d, sort_key=False: column(
+                d.sort_out if sort_key and d.sort_out else d.out, src[d.table]), lambda m: column(m.out))
+            if order:
+                sel = sel.order_by(*order)
+            for name, _, m_sel in members:
+                sel = sel.with_(name, as_=m_sel)
         plan.form = "constant"
         plan.sql = sel.sql(dialect=self.dialect, pretty=True)
         return plan

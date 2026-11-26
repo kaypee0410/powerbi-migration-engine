@@ -176,6 +176,10 @@ class Renderer:
             return exp.Coalesce(this=a[0], expressions=a[1:])
         if name == "CONCAT":
             return exp.Concat(expressions=a, coalesce=True)
+        if d == "sqlite":
+            res = _sqlite_date_fn(name, a)
+            if res is not None:
+                return res
         if name in ("YEAR", "MONTH", "DAY"):
             return {"YEAR": exp.Year, "MONTH": exp.Month, "DAY": exp.Day}[name](this=a[0])
         if name in ("QUARTER", "HOUR", "MINUTE", "SECOND", "WEEKDAY", "WEEKNUM"):
@@ -230,6 +234,63 @@ class Renderer:
                       "LIKE_ENDS": [literal("%"), a[1]]}[name]
             return exp.Like(this=a[0], expression=exp.Concat(expressions=pieces, coalesce=True))
         return exp.Anonymous(this=name, expressions=a)
+
+
+_STRFTIME_PART = {"YEAR": "%Y", "MONTH": "%m", "DAY": "%d", "HOUR": "%H", "MINUTE": "%M", "SECOND": "%S"}
+
+
+def _sqlite_date_fn(name: str, a: list) -> exp.Expression | None:
+    """SQLite has no YEAR/MONTH/DATEFROMPARTS/EDATE/EOMONTH: build them from STRFTIME and DATETIME modifiers.
+
+    Dates are stored as 'YYYY-MM-DD HH:MM:SS' text (see profile._sqlite_frame), so every date result is
+    produced with DATETIME() in that same format and compares correctly as text.
+    """
+    def fn(f, *args):
+        return exp.Anonymous(this=f, expressions=list(args))
+
+    def int_(e):
+        return exp.Cast(this=e, to=exp.DataType.build("INT"))
+
+    def part(fmt, x):
+        return int_(fn("STRFTIME", literal(fmt), x))
+
+    def months(n):                         # '+3 months' / '-1 months'
+        return fn("PRINTF", literal("%+d months"), n)
+
+    def blank_safe(result, args):
+        # PRINTF('%d', NULL) prints 0, so a BLANK argument would silently become 0: return NULL instead,
+        # like DATEFROMPARTS / DATEADD do in the other dialects.
+        cond = None
+        for x in args:
+            if isinstance(x, exp.Literal):
+                continue
+            c = exp.Is(this=x.copy(), expression=exp.Null())
+            cond = c if cond is None else exp.Or(this=cond, expression=c)
+        return result if cond is None else exp.Case(ifs=[exp.If(this=cond, true=exp.Null())], default=result)
+
+    if name == "CURRENT_DATE":            # TODAY(): midnight, in the stored 'YYYY-MM-DD HH:MM:SS' format
+        return fn("DATETIME", literal("now"), literal("localtime"), literal("start of day"))
+    if name in _STRFTIME_PART:
+        return part(_STRFTIME_PART[name], a[0])
+    if name == "QUARTER":
+        return int_(exp.Div(this=exp.Paren(this=exp.Add(this=part("%m", a[0]), expression=literal(2))),
+                            expression=literal(3)))
+    if name == "DATE":
+        # DAX DATE rolls over like Excel: DATE(2025, 13, 1) = 2026-01-01, DATE(2025, 3, 0) = 2025-02-28.
+        sub1 = lambda e: exp.Paren(this=exp.Sub(this=e, expression=literal(1)))  # noqa: E731
+        return blank_safe(fn("DATETIME", fn("PRINTF", literal("%04d-01-01"), a[0]), months(sub1(a[1])),
+                             fn("PRINTF", literal("%+d days"), sub1(a[2]))), a[:3])
+    if name == "EOMONTH":
+        return blank_safe(fn("DATETIME", a[0], literal("start of month"),
+                             months(exp.Add(this=a[1], expression=literal(1))), literal("-1 day")), a[:2])
+    if name == "EDATE":
+        # Same day n months later, clamped to the end of a shorter month (EDATE(Jan 31, 1) = Feb 28).
+        last_day = part("%d", fn("DATETIME", a[0], literal("start of month"),
+                                 months(exp.Add(this=a[1], expression=literal(1))), literal("-1 day")))
+        day = exp.Least(this=part("%d", a[0]), expressions=[last_day])   # SQLite renders this as MIN(a, b)
+        return blank_safe(fn("DATETIME", a[0], literal("start of month"), months(a[1]),
+                             fn("PRINTF", literal("%+d days"), exp.Sub(this=day, expression=literal(1)))), a[:2])
+    return None
 
 
 def to_sql(e: exp.Expression, dialect: str, pretty: bool = True) -> str:
