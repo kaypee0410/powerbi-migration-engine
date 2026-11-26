@@ -30,6 +30,7 @@ except ImportError:
 
 from pbi_insights import __version__
 from pbi_insights.extract.package import SUPPORTED_EXTENSIONS
+from pbi_insights.analyze.review_groups import group_reviews
 from pbi_insights.pipeline import DIALECTS, STEPS, Options, run
 
 BASE = Path(__file__).resolve().parent
@@ -86,12 +87,15 @@ def _preview(data: dict) -> dict:
         sources.append({"table": t["name"], "role": role(t), "rows": t.get("row_count"),
                         "connector": m.get("connector") or ("DAX" if t.get("calculated") else ""),
                         "objects": ", ".join(m.get("source_objects") or (s.get("sql") or {}).get("objects") or []),
-                        "view": views.get(t["name"], "")})
+                        "steps": len(m.get("steps") or []), "view": views.get(t["name"], "")})
     return {
+        "target_views": len(data["views"]),
+        "review": group_reviews(data["measures"]),
         "findings": data["findings"],
         "decisions": [list(d) for d in data["decisions"]],
         "insights": [{"id": p["id"], "tab": p["page"], "title": p["title"] or "", "chart": p["generic_type"],
-                      "approach": p["approach"], "question": p["question"], "complexity": p["complexity"]}
+                      "approach": p["approach"], "question": p["question"], "complexity": p["complexity"],
+                      "rows": (runs.get(p["id"]) or {}).get("rows")}
                      for p in plans],
         "measures": [{"name": m["name"], "scope": m["scope"], "pattern": m["pattern"],
                       "status": m["translation"].status, "used": ", ".join(m["used_directly_in"])}
@@ -132,6 +136,18 @@ def _worker(job_id: str, upload: Path, options: Options):
             gc.collect()                      # release the model's file handles before deleting (Windows)
             if not KEEP_UPLOADS:
                 shutil.rmtree(upload.parent, ignore_errors=True)
+
+
+def _done_file(job_id: str) -> Path:
+    return _job_dir(job_id) / "review.json"
+
+
+def _done(job_id: str) -> list[str]:
+    """Measures the user marked as done on the page, stored per run next to the workbook."""
+    try:
+        return sorted(json.loads(_done_file(job_id).read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        return []
 
 
 def _public(job: dict) -> dict:
@@ -183,13 +199,36 @@ def create_job():
 def job_status(job_id):
     with LOCK:
         job = JOBS.get(job_id)
-        if job:
-            return jsonify(_public(job))
-    meta = _job_dir(job_id) / "meta.json"
-    if meta.is_file():
+        out = _public(job) if job else None
+    if out is None:
+        meta = _job_dir(job_id) / "meta.json"
+        if not meta.is_file():
+            abort(404)
         m = json.loads(meta.read_text(encoding="utf-8"))
-        return jsonify(_public({**m, "status": "done", "step": len(STEPS), "message": "Workbook ready", "log": []}))
-    abort(404)
+        out = _public({**m, "status": "done", "step": len(STEPS), "message": "Workbook ready", "log": []})
+    if out["status"] == "done":
+        out["done"] = _done(job_id)
+    return jsonify(out)
+
+
+@app.post("/api/jobs/<job_id>/done")
+def mark_done(job_id):
+    """Mark a measure to review as done (or not) for this run. Body: {"measure": name, "done": bool}."""
+    meta = _job_dir(job_id) / "meta.json"
+    if not meta.is_file():
+        abort(404)
+    body = request.get_json(silent=True) or {}
+    name, flag = body.get("measure"), body.get("done")
+    if not isinstance(name, str) or not isinstance(flag, bool):
+        return jsonify(error="Send a measure name and done: true or false."), 400
+    review = json.loads(meta.read_text(encoding="utf-8")).get("preview", {}).get("review") or []
+    if name not in {m["name"] for g in review for m in g["measures"]}:
+        return jsonify(error="That measure is not on this run's review list."), 400
+    with LOCK:
+        done = set(_done(job_id))
+        (done.add if flag else done.discard)(name)
+        _done_file(job_id).write_text(json.dumps(sorted(done)), encoding="utf-8")
+    return jsonify(done=sorted(done))
 
 
 @app.get("/api/jobs")

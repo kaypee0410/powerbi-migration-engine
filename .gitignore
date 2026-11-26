@@ -19,6 +19,7 @@ outputs/*
 samples/*
 !samples/.gitkeep
 !samples/README.md
+design/mockups/private/
 
 # OS / editors
 .DS_Store

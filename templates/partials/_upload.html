@@ -1,0 +1,39 @@
+{# Upload panel: drop zone, SQL dialect, read-data option, submit. Field names are what POST /api/jobs reads. #}
+<form id="upload-form" class="panel" novalidate aria-labelledby="upload-h">
+  <h2 id="upload-h" class="visually-hidden">Upload a file</h2>
+
+  <label id="drop" class="drop" for="file">
+    <input id="file" name="file" type="file" accept="{{ extensions }}" class="visually-hidden">
+    <svg class="drop-icon" width="40" height="48" viewBox="0 0 40 48" aria-hidden="true">
+      <rect class="page" x="1" y="1" width="38" height="46" rx="2" stroke-width="1.5"/>
+      <rect class="bar" x="8" y="22" width="5" height="16"/><rect class="bar" x="17.5" y="14" width="5" height="24" opacity=".7"/>
+      <rect class="bar" x="27" y="28" width="5" height="10" opacity=".45"/>
+    </svg>
+    <span>
+      <span class="drop-name" id="drop-title">Drop a .pbix file here</span>
+      <span class="drop-hint" id="drop-hint">or <span class="link-like">choose a file</span>. Also reads .pbit templates and
+        .bim models, up to {{ max_mb }} MB.</span>
+    </span>
+  </label>
+
+  <div class="opts">
+    <div>
+      <label class="opt-label" for="dialect">SQL dialect</label>
+      <select id="dialect" name="dialect">
+        {% for key, label in dialects.items() %}<option value="{{ key }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="check"><input id="read_data" name="read_data" type="checkbox">
+        <span><strong>Read the data saved in the file</strong>
+          <span class="help">Profiles each column and test-runs every insight query. Slower on large files.</span></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button id="submit" type="submit" class="btn btn-primary" disabled>Create workbook</button>
+  </div>
+  <p id="form-error" class="form-error" role="alert" hidden></p>
+</form>

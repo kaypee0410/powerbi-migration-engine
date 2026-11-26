@@ -1,0 +1,54 @@
+/* Design tokens: the only place colours, fonts and the radius are written as values (design/ui-plan.md §2).
+   Fonts are bundled in static/fonts/ (SIL OFL, licences alongside) so the page works offline. */
+@font-face { font-family: "Barlow Semi Condensed"; font-weight: 500; font-style: normal; font-display: swap;
+  src: url("../fonts/barlow-semi-condensed-500.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-weight: 600; font-style: normal; font-display: swap;
+  src: url("../fonts/barlow-semi-condensed-600.woff2") format("woff2"); }
+@font-face { font-family: "Source Sans 3"; font-weight: 400; font-style: normal; font-display: swap;
+  src: url("../fonts/source-sans-3-400.woff2") format("woff2"); }
+@font-face { font-family: "Source Sans 3"; font-weight: 600; font-style: normal; font-display: swap;
+  src: url("../fonts/source-sans-3-600.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 400; font-style: normal; font-display: swap;
+  src: url("../fonts/jetbrains-mono-400.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 500; font-style: normal; font-display: swap;
+  src: url("../fonts/jetbrains-mono-500.woff2") format("woff2"); }
+
+:root {
+  /* colour */
+  --paper: #F2F3F1;          /* page background */
+  --surface: #FFFFFF;        /* panels, tables */
+  --surface-sunk: #FAFAF8;   /* table heads, code panes */
+  --ink: #1C2420;
+  --muted: #5B6660;
+  --rule: #D9DDD8;
+  --rule-strong: #B9BFB9;
+  --hero-grid: #E3E6E2;      /* grid-paper lines in the header */
+  --green: #1F6B4F;          /* translated, primary action */
+  --green-dark: #17533D;
+  --green-tint: #E3EFE8;
+  --on-green: #FFFFFF;
+  --on-green-muted: #CFE3D8;
+  --amber: #B7791F;          /* needs review, and only that */
+  --amber-text: #7E520F;
+  --amber-tint: #F8EBD3;
+  --red: #A33A2E;            /* High severity, and error text */
+  --red-tint: #F6E3E0;
+
+  /* type */
+  --display: "Barlow Semi Condensed", "Bahnschrift", "Arial Narrow", sans-serif;
+  --body: "Source Sans 3", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --code: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+
+  /* shape and spacing */
+  --r: 4px;
+  --page: 1120px;
+  --gutter: 32px;
+  --s1: 12px;
+  --s2: 24px;
+  --s3: 36px;
+  --s4: 56px;
+}
+
+@media (max-width: 600px) {
+  :root { --gutter: 18px; }
+}

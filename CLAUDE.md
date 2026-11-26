@@ -37,7 +37,19 @@ as the project grows (decisions, conventions, gotchas).
 
 ## Claude Code helpers in .claude/
 - Skills: `extract-pbix` (run and summarise a file), `dax-to-sql` (extend the translator),
-  `add-workbook-sheet` (change the Excel output).
+  `add-workbook-sheet` (change the Excel output), `ui-from-mockup` (build the front end from the HTML
+  mockups in `design/mockups/`; plan lives in `design/ui-plan.md`).
+
+## Front end
+- One page, no build step: `templates/index.html` (sections in `templates/partials/`) +
+  `static/css/tokens.css` (all colours, fonts, spacing) + `static/css/style.css` (components, no hex values) +
+  `static/js/app.js` (selects elements by ID; keep the IDs in sync when changing the markup).
+- The page reads `/api/jobs/<id>` (`_public()` + `_preview()` in `app.py`). Measures to review are grouped by
+  `analyze/review_groups.py` (reads translator output only); "Mark as done" is stored in `outputs/<id>/review.json`.
+- Design rules (design/ui-plan.md): green = translated / main action, amber = needs review only, red = High only;
+  monospace only for real code and object names; sentence case.
+- Runs offline: no CDN, web fonts or remote images; vendor assets into `static/`.
+- Design mockups go in `design/mockups/` (placeholder data only; `design/mockups/private/` is ignored).
 - Agent: `dax-sql-reviewer` (checks generated SQL against DAX semantics).
 
 ## Roadmap / open items

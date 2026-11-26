@@ -1,0 +1,32 @@
+{# Hero: title, lede, version pill and the Power BI file -> Translate -> targets diagram. #}
+<header class="hero">
+  <div class="hero-in">
+    <div>
+      <h1>Power BI Extraction Insights</h1>
+      <div class="lede-wrap"><p class="lede">Upload a Power BI file to see its tabs, insights, semantic model, Power Query
+        sources and DAX, and get a migration workbook for Incorta, QuickSight or Tableau.</p></div>
+      <p class="version">Version {{ version }}, running on this computer</p>
+    </div>
+
+    <svg class="flow" viewBox="0 0 470 232" role="img" aria-labelledby="flow-t">
+      <title id="flow-t">The four parts of a Power BI file are translated into SQL and a build plan for Incorta, QuickSight or Tableau.</title>
+      <text class="sub" x="0" y="14">Your Power BI file</text>
+      <text class="sub" x="340" y="43">Migrate to</text>
+      <path class="wire" d="M150 48 C172 48 168 128 190 128"/>
+      <path class="wire" d="M150 100 C172 100 168 128 190 128"/>
+      <path class="wire" d="M150 152 C172 152 168 128 190 128"/>
+      <path class="wire" d="M150 204 C172 204 168 128 190 128"/>
+      <g class="layer"><rect x=".75" y="28" width="149" height="40" rx="3"/><rect class="tick" x=".75" y="28" width="4" height="40"/><text x="16" y="45">Report tabs</text><text class="sub" x="16" y="60">pages and visuals</text></g>
+      <g class="layer"><rect x=".75" y="80" width="149" height="40" rx="3"/><rect class="tick" x=".75" y="80" width="4" height="40"/><text x="16" y="97">Semantic model</text><text class="sub" x="16" y="112">tables and joins</text></g>
+      <g class="layer"><rect x=".75" y="132" width="149" height="40" rx="3"/><rect class="tick" x=".75" y="132" width="4" height="40"/><text x="16" y="149">Power Query</text><text class="sub" x="16" y="164">sources and steps</text></g>
+      <g class="layer"><rect x=".75" y="184" width="149" height="40" rx="3"/><rect class="tick" x=".75" y="184" width="4" height="40"/><text x="16" y="201">DAX measures</text><text class="sub" x="16" y="216">calculations</text></g>
+      <g class="core"><rect x="190" y="101" width="110" height="54" rx="4"/><text x="245" y="125" text-anchor="middle">Translate</text><text class="sub" x="245" y="143" text-anchor="middle">SQL and build plan</text></g>
+      <path class="wire" d="M300 128 C320 128 320 77 340 77"/>
+      <path class="wire" d="M300 128 L340 128"/>
+      <path class="wire" d="M300 128 C320 128 320 179 340 179"/>
+      <g class="tgt"><rect x="340.75" y="57" width="128.5" height="40" rx="3"/><text x="356" y="82">Incorta</text></g>
+      <g class="tgt"><rect x="340.75" y="108" width="128.5" height="40" rx="3"/><text x="356" y="133">QuickSight</text></g>
+      <g class="tgt"><rect x="340.75" y="159" width="128.5" height="40" rx="3"/><text x="356" y="184">Tableau</text></g>
+    </svg>
+  </div>
+</header>

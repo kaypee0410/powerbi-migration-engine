@@ -1,0 +1,14 @@
+{# Run status: steps tick while the job runs, then fold into one summary line. #}
+<section id="progress" class="run" hidden aria-labelledby="progress-title">
+  <h2 id="progress-title" class="run-title"><span id="progress-verb">Decoding</span> <strong id="progress-file"></strong></h2>
+  <div id="run-summary" class="run-summary" hidden>
+    <span class="dot is-done" aria-hidden="true"></span>
+    <span id="run-summary-text"></span>
+    <button type="button" class="linkbtn" id="steps-toggle" aria-expanded="false" aria-controls="steps">Show steps</button>
+  </div>
+  <ol id="steps" class="steps">
+    {% for s in steps %}<li data-step="{{ loop.index0 }}"><span class="dot" aria-hidden="true"></span><span><span class="step-name">{{ s }}</span><span class="step-note"></span></span></li>
+    {% endfor %}
+  </ol>
+  <p id="live" class="visually-hidden" aria-live="polite"></p>
+</section>

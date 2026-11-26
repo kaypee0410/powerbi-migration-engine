@@ -1,0 +1,39 @@
+{# Results: header and downloads, coverage block, tabs. Panels are filled by app.js from the job's preview. #}
+<section id="result" hidden aria-labelledby="result-title">
+  <div class="result-head">
+    <div>
+      <h2 id="result-title"></h2>
+      <p class="meta" id="result-meta"></p>
+    </div>
+    <div class="downloads">
+      <a id="dl-xlsx" class="btn btn-primary" href="#" download>
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1v8M3.5 5.5 7 9l3.5-3.5M1.5 12.5h11" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Workbook (.xlsx)</a>
+      <a id="dl-json" class="btn" href="#" download>
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1v8M3.5 5.5 7 9l3.5-3.5M1.5 12.5h11" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>JSON</a>
+    </div>
+  </div>
+  <p id="warnings" class="warnings" hidden></p>
+
+  <div class="coverage">
+    <div class="cov-line">
+      <p class="cov-num" id="cov-num"></p>
+      <p class="cov-text" id="cov-text"></p>
+    </div>
+    <div class="bar" id="bar" role="img"></div>
+    <div class="legend" id="legend"></div>
+    <dl class="stats" id="stats"></dl>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="Results" id="tabs">
+    <button type="button" class="tab" role="tab" id="tab-review" aria-controls="panel-review" data-tab="review">To review<span class="count"></span></button>
+    <button type="button" class="tab" role="tab" id="tab-insights" aria-controls="panel-insights" data-tab="insights">Insights<span class="count"></span></button>
+    <button type="button" class="tab" role="tab" id="tab-measures" aria-controls="panel-measures" data-tab="measures">Measures<span class="count"></span></button>
+    <button type="button" class="tab" role="tab" id="tab-sources" aria-controls="panel-sources" data-tab="sources">Sources<span class="count"></span></button>
+    <button type="button" class="tab" role="tab" id="tab-sql" aria-controls="panel-sql" data-tab="sql">Insight SQL<span class="count"></span></button>
+  </div>
+  <div class="tabpanel" role="tabpanel" id="panel-review" aria-labelledby="tab-review"></div>
+  <div class="tabpanel" role="tabpanel" id="panel-insights" aria-labelledby="tab-insights" hidden></div>
+  <div class="tabpanel" role="tabpanel" id="panel-measures" aria-labelledby="tab-measures" hidden></div>
+  <div class="tabpanel" role="tabpanel" id="panel-sources" aria-labelledby="tab-sources" hidden></div>
+  <div class="tabpanel" role="tabpanel" id="panel-sql" aria-labelledby="tab-sql" hidden></div>
+</section>

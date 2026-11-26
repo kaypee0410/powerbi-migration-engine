@@ -78,9 +78,12 @@ On the Retail Analysis Sample all 16 data insights match an independent re-imple
 ## Project layout
 
 ```
-app.py                  Flask server (upload, background jobs, downloads)
-templates/index.html    The page
-static/css, static/js   Page style and behaviour
+app.py                  Flask server (upload, background jobs, downloads, review "done" state)
+templates/index.html    The page; one partial per section in templates/partials/
+static/css              tokens.css (colours, fonts, spacing) and style.css (components)
+static/js/app.js        Page behaviour: upload, progress, results tabs, history
+static/fonts/           Bundled web fonts (SIL OFL), so the page works offline
+design/                 UI mockups and the UI plan (design/ui-plan.md)
 pbi_insights/
   extract/              PBIX package, report layout, semantic model, Power Query, native SQL lineage
   analyze/              DAX parser and translator, SQL rendering, query builder, planner, findings, views
